@@ -779,8 +779,8 @@ Private Sub LayoutAddStockButtons()
         If left$(shp.Name, 4) = "btn_" Then shp.Delete
     Next shp
 
-    captions = Array("Add Stock", "Remove Stock", "Attach Barcode", "Clear Entry", "Toggle Theme", "Rebind Dropdowns")
-    macros = Array("AddStock_Single", "RemoveStock_Single", "AddBarcodeToSKU", "ClearAddStockForm", "ToggleDarkMode", "RebindAddStockDropdowns")
+    captions = Array("Add Stock", "Remove Stock", "Attach Barcode", "Clear Entry", "Toggle Theme", "Rebind Dropdowns", "Price Video Games")
+    macros = Array("AddStock_Single", "RemoveStock_Single", "AddBarcodeToSKU", "ClearAddStockForm", "ToggleDarkMode", "RebindAddStockDropdowns", "PriceVideoGames")
 
     btnW = 145: btnH = 30
     colGap = 12: rowGap = 12
@@ -3792,3 +3792,86 @@ End Sub
 '   BindBatchQualityDropdowns ws
 ' with:
 '   BindBatchDropdowns_All ws
+
+' =====================================================================================
+' PRICING (Video Games)
+' =====================================================================================
+Public Sub PriceVideoGames(): SafeRun "Price Video Games", "PriceVideoGames_Worker": End Sub
+
+Private Sub PriceVideoGames_Worker()
+    Dim wsInv As Worksheet, cols As InventoryCols
+    Dim lastRow As Long, r As Long
+    Dim sku As String, console As String, gameName As String, quality As String, country As String
+    Dim currentPrice As Double, newPriceStr As String, newPrice As Double
+    Dim priced As Long, skipped As Long
+    Dim unpricedOnly As Boolean
+    Dim modeChoice As VbMsgBoxResult
+
+    Set wsInv = EnsureSheet("Inventory")
+    EnsureInventoryHasHeadersAndBusiness
+    GetInvCols wsInv, cols
+
+    If cols.ListedPrice = 0 Then
+        MsgBox "Listed Price column not found in Inventory.", vbExclamation, MSG_TITLE
+        Exit Sub
+    End If
+
+    modeChoice = MsgBox( _
+        "Price ONLY unpriced Video Games items?" & vbCrLf & _
+        "Yes = only items with no current price." & vbCrLf & _
+        "No  = review all Video Games items." & vbCrLf & _
+        "Cancel = abort.", _
+        vbYesNoCancel + vbQuestion, MSG_TITLE)
+    If modeChoice = vbCancel Then Exit Sub
+    unpricedOnly = (modeChoice = vbYes)
+
+    lastRow = TableLastRow(wsInv, "A")
+    priced = 0: skipped = 0
+
+    For r = 2 To lastRow
+        If NormalizeBusiness(CStr(wsInv.Cells(r, cols.Business).value)) <> BIZ_VG Then GoTo NextRow
+        If Val(wsInv.Cells(r, cols.Quantity).value) <= 0 Then GoTo NextRow
+        currentPrice = Val(wsInv.Cells(r, cols.ListedPrice).value)
+        If unpricedOnly And currentPrice > 0 Then GoTo NextRow
+
+        sku = CStr(wsInv.Cells(r, cols.sku).value)
+        console = CStr(wsInv.Cells(r, cols.Console).value)
+        gameName = CStr(wsInv.Cells(r, cols.GameName).value)
+        quality = CStr(wsInv.Cells(r, cols.Quality).value)
+        country = CStr(wsInv.Cells(r, cols.Country).value)
+
+        newPriceStr = Trim$(InputBox( _
+            "SKU: " & sku & vbCrLf & _
+            "Console: " & console & vbCrLf & _
+            "Game: " & gameName & vbCrLf & _
+            "Quality: " & quality & vbCrLf & _
+            "Country: " & country & vbCrLf & _
+            "Qty: " & wsInv.Cells(r, cols.Quantity).value & vbCrLf & _
+            vbCrLf & "Enter listed price (blank = skip):", _
+            MSG_TITLE, _
+            IIf(currentPrice > 0, CStr(currentPrice), "") _
+        ))
+
+        If newPriceStr = "" Then
+            skipped = skipped + 1
+            GoTo NextRow
+        End If
+
+        If Not IsNumeric(newPriceStr) Then
+            MsgBox "Invalid price '" & newPriceStr & "' — skipping this item.", vbExclamation, MSG_TITLE
+            skipped = skipped + 1
+            GoTo NextRow
+        End If
+
+        newPrice = Val(newPriceStr)
+        wsInv.Cells(r, cols.ListedPrice).value = newPrice
+        priced = priced + 1
+NextRow:
+    Next r
+
+    Application.ScreenUpdating = True
+    RefreshDashboard_Worker
+    MsgBox "Pricing complete." & vbCrLf & _
+           "Items priced: " & priced & vbCrLf & _
+           "Items skipped: " & skipped, vbInformation, MSG_TITLE
+End Sub
