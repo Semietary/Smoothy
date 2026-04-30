@@ -79,8 +79,9 @@ Private Const BIZ_VG As String = "Video Games"
 Private Const BIZ_PK As String = "Pokemon"
 Private Const BIZ_CL As String = "Cologne"
 Private Const BIZ_ALL As String = "All"
-Private Const FIN_VIEW_LABEL_CELL As String = "X4"
-Private Const FIN_VIEW_VALUE_CELL As String = "Y4"
+Private Const FIN_VIEW_LABEL_CELL As String = "Y4"  ' visible label cell
+Private Const FIN_VIEW_VALUE_CELL As String = "Z4"  ' visible dropdown (Data Validation list)
+Private Const FIN_VIEW_STORE_CELL As String = "X2"  ' hidden raw store – no validation, always writable
 
 ' SKU prefixes
 Private Const SKU_PREFIX_VG As String = "SKUVG"
@@ -892,9 +893,10 @@ Private Sub EnsureFinanceSheet()
 End Sub
 Public Sub FinanceDebug_ViewCell()
     Dim ws As Worksheet: Set ws = EnsureSheet("Finance")
-    MsgBox "Z4='" & CStr(ws.Range("Z4").value) & "'" & vbCrLf & _
-           "Y4='" & CStr(ws.Range("Y4").value) & "'" & vbCrLf & _
-           "Z8='" & CStr(ws.Range("Z8").value) & "'" _
+    MsgBox "X2 (store)='" & CStr(ws.Range(FIN_VIEW_STORE_CELL).value) & "'" & vbCrLf & _
+           "Z4 (dropdown)='" & CStr(ws.Range(FIN_VIEW_VALUE_CELL).value) & "'" & vbCrLf & _
+           "Y4 (label)='" & CStr(ws.Range(FIN_VIEW_LABEL_CELL).value) & "'" & vbCrLf & _
+           "ActiveFinanceViewBusiness='" & ActiveFinanceViewBusiness() & "'" _
            , vbInformation, MSG_TITLE
 End Sub
 Public Sub SetupFinanceSheet()
@@ -902,8 +904,10 @@ Public Sub SetupFinanceSheet()
     MsgBox "Finance sheet ensured.", vbInformation, MSG_TITLE
 End Sub
 Private Function ActiveFinanceViewBusiness() As String
+    ' Read from the hidden store cell (X2) – has NO Data Validation, so it is always writable
+    ' by macros regardless of Excel's validation guard on the visible dropdown (Z4).
     Dim ws As Worksheet: Set ws = EnsureSheet("Finance")
-    ActiveFinanceViewBusiness = NormalizeBusiness(CStr(ws.Range(FIN_VIEW_VALUE_CELL).value))
+    ActiveFinanceViewBusiness = NormalizeBusiness(CStr(ws.Range(FIN_VIEW_STORE_CELL).value))
     If ActiveFinanceViewBusiness = "" Then ActiveFinanceViewBusiness = BIZ_ALL
 End Function
 Private Sub AppendFinanceSale( _
@@ -1091,25 +1095,40 @@ Next r
 End Sub
 Public Sub FinanceFilter_All()
     Dim ws As Worksheet: Set ws = EnsureSheet("Finance")
+    ' FIN_VIEW_STORE_CELL (X2) has no Data Validation – write always succeeds.
+    ws.Range(FIN_VIEW_STORE_CELL).value = BIZ_ALL
+    ' Sync the visible dropdown (Z4). Excel's Data Validation guard can raise error 1004
+    ' when ShowInputMessage fires during a macro write; suppress only that expected case.
+    On Error Resume Next   ' expected: xlValidateList guard on Z4
     ws.Range(FIN_VIEW_VALUE_CELL).value = BIZ_ALL
+    On Error GoTo 0
     FinanceApplyFilters
 End Sub
 
 Public Sub FinanceFilter_VideoGames()
     Dim ws As Worksheet: Set ws = EnsureSheet("Finance")
+    ws.Range(FIN_VIEW_STORE_CELL).value = BIZ_VG
+    On Error Resume Next   ' expected: xlValidateList guard on Z4
     ws.Range(FIN_VIEW_VALUE_CELL).value = BIZ_VG
+    On Error GoTo 0
     FinanceApplyFilters
 End Sub
 
 Public Sub FinanceFilter_Pokemon()
     Dim ws As Worksheet: Set ws = EnsureSheet("Finance")
+    ws.Range(FIN_VIEW_STORE_CELL).value = BIZ_PK
+    On Error Resume Next   ' expected: xlValidateList guard on Z4
     ws.Range(FIN_VIEW_VALUE_CELL).value = BIZ_PK
+    On Error GoTo 0
     FinanceApplyFilters
 End Sub
 
 Public Sub FinanceFilter_Cologne()
     Dim ws As Worksheet: Set ws = EnsureSheet("Finance")
+    ws.Range(FIN_VIEW_STORE_CELL).value = BIZ_CL
+    On Error Resume Next   ' expected: xlValidateList guard on Z4
     ws.Range(FIN_VIEW_VALUE_CELL).value = BIZ_CL
+    On Error GoTo 0
     FinanceApplyFilters
 End Sub
 Public Sub BuildFilteredFinanceViews()
@@ -1373,29 +1392,40 @@ End Function
 Private Sub EnsureFinanceBusinessSelector()
     Dim ws As Worksheet: Set ws = EnsureSheet("Finance")
 
-    ' Clear old selector placements (prevents duplicates)
-    ws.Range(FIN_VIEW_LABEL_CELL).ClearContents
-    ws.Range(FIN_VIEW_VALUE_CELL).ClearContents
+    ' Clear ALL old selector locations to prevent duplicates from previous versions.
+    ' X4:Z4 and Y8:Z8 are reserved exclusively for the Finance Business selector
+    ' across all code revisions; no other content is expected in these cells.
+    On Error Resume Next
+    ws.Range("X4:Z4").ClearContents          ' covers legacy X4 label + old Y4/new Y4 + Z4
+    ws.Range("Y8:Z8").ClearContents          ' covers another legacy placement
+    ws.Range("X4").Validation.Delete         ' legacy label cell
+    ws.Range(FIN_VIEW_LABEL_CELL).Validation.Delete   ' Y4
+    ws.Range(FIN_VIEW_VALUE_CELL).Validation.Delete   ' Z4
+    ws.Range("Z8").Validation.Delete         ' legacy value cell
+    On Error GoTo 0
 
-    ' Label + value (single source of truth)
+    ' Label at Y4 (visible)
     ws.Range(FIN_VIEW_LABEL_CELL).value = "Finance View Business:"
     ws.Range(FIN_VIEW_LABEL_CELL).Font.Bold = True
 
+    ' Visible dropdown at Z4 – for display only; macros do NOT rely on this for reads
+    On Error Resume Next
     With ws.Range(FIN_VIEW_VALUE_CELL).Validation
         .Delete
-        .Add Type:=xlValidateList, Formula1:=BIZ_ALL & "," & BIZ_VG & "," & BIZ_PK & "," & BIZ_CL
+        .Add Type:=xlValidateList, AlertStyle:=xlValidAlertStop, _
+             Formula1:=BIZ_ALL & "," & BIZ_VG & "," & BIZ_PK & "," & BIZ_CL
     End With
+    On Error GoTo 0
 
-    ' Only set default if cell is blank OR not one of the allowed values
+    ' Determine the current valid selection from the hidden store cell (X2)
     Dim cur As String
-    cur = NormalizeBusiness(CStr(ws.Range(FIN_VIEW_VALUE_CELL).value))
+    cur = NormalizeBusiness(CStr(ws.Range(FIN_VIEW_STORE_CELL).value))
+    ' Default to All when blank or not one of the four recognised values
+    If cur <> BIZ_ALL And cur <> BIZ_VG And cur <> BIZ_PK And cur <> BIZ_CL Then cur = BIZ_ALL
 
-    If cur <> BIZ_ALL And cur <> BIZ_VG And cur <> BIZ_PK And cur <> BIZ_CL Then
-        ws.Range(FIN_VIEW_VALUE_CELL).value = BIZ_ALL
-    Else
-        ' Normalize the displayed value (e.g. casing)
-        ws.Range(FIN_VIEW_VALUE_CELL).value = cur
-    End If
+    ' Write the canonical value to both the hidden store and the visible dropdown
+    ws.Range(FIN_VIEW_STORE_CELL).value = cur
+    ws.Range(FIN_VIEW_VALUE_CELL).value = cur
 
     ws.Columns("Y").ColumnWidth = 18
     ws.Columns("Z").ColumnWidth = 16
